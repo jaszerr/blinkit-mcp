@@ -279,14 +279,33 @@ class CartService(BaseService):
                 let text = drawer.innerText;
                 let results = ["--- CART DETAILS ---"];
                 
-                // Try to extract items
-                let items = drawer.querySelectorAll("div[class*='DefaultProductCard__Container'], div[class*='CartProduct__Container']");
+                // Try to extract items. One cart item renders as a
+                // CartProduct__Container wrapping a DefaultProductCard__Container,
+                // so the old union selector matched both and listed every item
+                // twice. Prefer the outer wrapper (one per item) and fall back to
+                // the inner card for layouts without the wrapper.
+                let items = drawer.querySelectorAll("div[class*='CartProduct__Container']");
+                if (items.length === 0) {
+                    items = drawer.querySelectorAll("div[class*='DefaultProductCard__Container']");
+                }
                 items.forEach(item => {
                     let title = item.querySelector("div[class*='ProductTitle']")?.innerText || "";
                     let variant = item.querySelector("div[class*='ProductVariant']")?.innerText || "";
                     let price = item.querySelector("div[class*='Price-']")?.innerText || "";
-                    let qtyElement = item.querySelector("div[class*='AddToCart___StyledDiv']")?.parentElement;
-                    let qty = qtyElement ? qtyElement.innerText.replace(/\\n/g, '').replace("-", "").replace("+", "").trim() : "1";
+                    // Quantity is a bare text node inside the qty container,
+                    // sandwiched between the - and + buttons. Those buttons
+                    // render as icon-font glyphs (not literal +/-), so read only
+                    // the container's direct text nodes and keep the digits.
+                    let qtyContainer = item.querySelector("div[class*='AddToCart__UpdatedButtonContainer']");
+                    let qty = "1";
+                    if (qtyContainer) {
+                        let direct = Array.from(qtyContainer.childNodes)
+                            .filter(n => n.nodeType === 3)
+                            .map(n => n.textContent.trim())
+                            .join("");
+                        let digits = direct.replace(/[^0-9]/g, '');
+                        if (digits) qty = digits;
+                    }
                     if (title) {
                         results.push(`• ${title} | ${variant} | ${price} | Qty: ${qty}`);
                     }

@@ -9,8 +9,15 @@ class CheckoutService(BaseService):
             return "CRITICAL: Store is closed."
 
         try:
+            # The cart checkout button is the CheckoutStrip CTA ("Proceed To
+            # Pay"). Target its focusable container (tabindex=0) specifically,
+            # instead of the old broad `button, div` "Proceed" filter with
+            # `.last`, which matched several nested containers and could click
+            # the wrong element / fire at the wrong checkout stage.
             proceed_btn = (
-                self.page.locator("button, div").filter(has_text="Proceed").last
+                self.page.locator("div[class*='CheckoutStrip__AmountContainer']")
+                .filter(has_text="Proceed")
+                .first
             )
 
             # If Proceed not visible, try opening the cart first
@@ -188,12 +195,18 @@ class CheckoutService(BaseService):
                 print("Clicked 'Pay Now'. Please approve the payment on your UPI app.")
                 return "Clicked Pay Now."
 
-            # Strategy 2: Text match on page
-            pay_btn_text = (
-                self.page.locator("div, button").filter(has_text="Pay Now").last
+            # Strategy 2: the Pay Now container (confirmed class on the live
+            # checkout page). Replaces a previous broad `div, button` text match
+            # with `.last`, which could land on the wrong element on a money
+            # path. We prefer to fail (returning an error) over mis-clicking.
+            pay_btn_container = self.page.locator(
+                "div[class*='Zpayments__PayNowButtonContainer']"
             )
-            if await pay_btn_text.count() > 0 and await pay_btn_text.is_visible():
-                await pay_btn_text.click()
+            if (
+                await pay_btn_container.count() > 0
+                and await pay_btn_container.first.is_visible()
+            ):
+                await pay_btn_container.first.click()
                 print("Clicked 'Pay Now'.")
                 return "Clicked Pay Now."
 

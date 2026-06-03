@@ -39,10 +39,13 @@ rm -f "$INSTALL_DONE_MARKER"
 echo "Ensuring Playwright Firefox is installed (background)..."
 (
     touch "$INSTALL_MARKER"
-    uv run playwright install firefox 2>&1
+    if uv run playwright install firefox 2>&1; then
+        touch "$INSTALL_DONE_MARKER"
+        echo "Playwright Firefox install complete."
+    else
+        echo "Playwright Firefox install FAILED." >&2
+    fi
     rm -f "$INSTALL_MARKER"
-    touch "$INSTALL_DONE_MARKER"
-    echo "Playwright Firefox install complete."
 ) &
 
 # Restore stdout to the MCP protocol channel and launch the server

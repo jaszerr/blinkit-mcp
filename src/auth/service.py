@@ -1,4 +1,6 @@
 import os
+import sys
+import asyncio
 from playwright.async_api import async_playwright
 
 
@@ -27,24 +29,31 @@ class BlinkitAuth:
         try:
             from src.utils.geo import get_current_location
 
-            detected_loc = get_current_location()
+            # Run the blocking HTTP lookup off the event loop so it doesn't stall
+            # other async work during startup.
+            detected_loc = await asyncio.to_thread(get_current_location)
             if detected_loc:
-                print(f"Using detected location: {detected_loc}")
+                print(f"Using detected location: {detected_loc}", file=sys.stderr)
                 geolocation = detected_loc
             else:
-                print("Could not detect location. Using fallback (Noida).")
+                print(
+                    "Could not detect location. Using fallback (Noida).", file=sys.stderr
+                )
         except Exception as e:
-            print(f"Error initializing location detection: {e}. Using fallback.")
+            print(
+                f"Error initializing location detection: {e}. Using fallback.",
+                file=sys.stderr,
+            )
 
         if os.path.exists(self.session_path):
-            print(f"Loading session from {self.session_path}")
+            print(f"Loading session from {self.session_path}", file=sys.stderr)
             self.context = await self.browser.new_context(
                 storage_state=self.session_path,
                 permissions=["geolocation"],
                 geolocation=geolocation,
             )
         else:
-            print("No existing session found. Starting fresh.")
+            print("No existing session found. Starting fresh.", file=sys.stderr)
             self.context = await self.browser.new_context(
                 permissions=["geolocation"],
                 geolocation=geolocation,
@@ -56,20 +65,24 @@ class BlinkitAuth:
             await self.page.goto(
                 "https://blinkit.com/", timeout=60000, wait_until="domcontentloaded"
             )
-            print("Opened Blinkit.com")
+            print("Opened Blinkit.com", file=sys.stderr)
         except Exception as e:
             print(
-                f"Warning: Navigation to Blinkit took too long or failed: {e}. Attempting to proceed regardless."
+                f"Warning: Navigation to Blinkit took too long or failed: {e}. Attempting to proceed regardless.",
+                file=sys.stderr,
             )
 
         # Handle "Detect my location" popup if it appears
         try:
-            print("Checking for location popup...")
+            print("Checking for location popup...", file=sys.stderr)
             location_btn = self.page.locator("button", has_text="Detect my location")
             try:
                 # Wait briefly to see if it appears
                 await location_btn.wait_for(state="visible", timeout=3000)
-                print("Location popup detected. Clicking 'Detect my location'...")
+                print(
+                    "Location popup detected. Clicking 'Detect my location'...",
+                    file=sys.stderr,
+                )
                 await location_btn.click()
                 # Wait for it to disappear potentially
                 await location_btn.wait_for(state="hidden", timeout=5000)
@@ -77,20 +90,22 @@ class BlinkitAuth:
                 # Timed out waiting for it, probably didn't appear or already handled
                 pass
         except Exception as e:
-            print(f"Note: Error checking location popup: {e}")
+            print(f"Note: Error checking location popup: {e}", file=sys.stderr)
 
         # Check for global unavailability message on Homepage
         try:
             if await self.page.is_visible("text=Currently unavailable"):
                 print(
-                    "WARNING: Store is marked as 'Currently unavailable' on the homepage."
+                    "WARNING: Store is marked as 'Currently unavailable' on the homepage.",
+                    file=sys.stderr,
                 )
         except Exception:
             pass
 
     async def login(self, phone_number: str):
         """Initiates the login process with a phone number."""
-        print(f"Attempting to log in with {phone_number}...")
+        masked = "*" * max(0, len(phone_number) - 4) + phone_number[-4:]
+        print(f"Attempting to log in with {masked}...")
 
         # 1. Click Login Button
         try:
@@ -123,7 +138,7 @@ class BlinkitAuth:
             if phone_input:
                 await phone_input.click()
                 await phone_input.fill(phone_number)
-                print(f"Filled phone number: {phone_number}")
+                print(f"Filled phone number: {masked}")
 
                 # 3. Submit Phone Number
                 await self.page.wait_for_timeout(500)  # slight delay for UI update
@@ -195,7 +210,6 @@ class BlinkitAuth:
                 return True
 
             return False
-            return False
         except Exception:
             return False
 
@@ -204,7 +218,7 @@ class BlinkitAuth:
         # Ensure directory exists
         os.makedirs(os.path.dirname(self.session_path), exist_ok=True)
         await self.context.storage_state(path=self.session_path)
-        print(f"Session saved to {self.session_path}")
+        print(f"Session saved to {self.session_path}", file=sys.stderr)
 
     async def close(self):
         """Closes the browser."""

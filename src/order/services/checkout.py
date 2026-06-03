@@ -170,9 +170,18 @@ class CheckoutService(BaseService):
             if iframe_element:
                 frame = await iframe_element.content_frame()
                 if frame:
-                    frame_btn = frame.locator("text='Pay Now', text='Place Order'")
-                    if await frame_btn.count() > 0:
-                        await frame_btn.first.click()
+                    # NOTE: "text='Pay Now', text='Place Order'" is NOT a valid
+                    # Playwright union selector and never matched. Use two valid
+                    # lookups instead (same intent: click whichever exists).
+                    frame_pay_now = frame.locator("text='Pay Now'")
+                    if await frame_pay_now.count() > 0:
+                        await frame_pay_now.first.click()
+                        print("Clicked payment button inside iframe.")
+                        return "Clicked payment button inside iframe."
+
+                    frame_place_order = frame.locator("text='Place Order'")
+                    if await frame_place_order.count() > 0:
+                        await frame_place_order.first.click()
                         print("Clicked payment button inside iframe.")
                         return "Clicked payment button inside iframe."
 

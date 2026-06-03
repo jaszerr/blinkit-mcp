@@ -1,3 +1,4 @@
+import sys
 from playwright.async_api import Page
 from .services.search import SearchService
 from .services.location import LocationService
@@ -28,7 +29,10 @@ class BlinkitOrder:
             url = response.url
             if "zpaykit" in url or "payment" in url:
                 if response.status >= 400:
-                    print(f"DEBUG: Payment API Error {response.status} at {url}")
+                    print(
+                        f"DEBUG: Payment API Error {response.status} at {url}",
+                        file=sys.stderr,
+                    )
 
                 # Try to parse JSON for failure messages even on 200 OK
                 if "application/json" in response.headers.get("content-type", ""):
@@ -37,7 +41,10 @@ class BlinkitOrder:
                         if isinstance(data, dict) and (
                             data.get("status") == "failed" or data.get("error")
                         ):
-                            print(f"DEBUG: Payment API Failure captured: {data}")
+                            print(
+                                f"DEBUG: Payment API Failure captured: {data}",
+                                file=sys.stderr,
+                            )
                     except Exception:
                         pass
         except Exception:

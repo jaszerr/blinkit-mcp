@@ -1,4 +1,5 @@
 import json
+import sys
 import urllib.request
 
 
@@ -14,5 +15,5 @@ def get_current_location():
             if data.get("status") == "success":
                 return {"latitude": data.get("lat"), "longitude": data.get("lon")}
     except Exception as e:
-        print(f"Error fetching location from IP API: {e}")
+        print(f"Error fetching location from IP API: {e}", file=sys.stderr)
     return None

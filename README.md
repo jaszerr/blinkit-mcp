@@ -57,9 +57,9 @@ https://github.com/user-attachments/assets/531f09ad-648a-4ee2-9271-5993ce637093
 2. **(Optional) Pre-install Browsers**  
    If you want to speed up the first run:
    ```bash
-   uvx playwright install chromium
+   uvx playwright install firefox
    # OR if you have Node.js:
-   # npx playwright install chromium
+   # npx playwright install firefox
    ```
 
 3. **Download the MCP bundle**  
@@ -79,7 +79,7 @@ https://github.com/user-attachments/assets/531f09ad-648a-4ee2-9271-5993ce637093
 | 🔎 **Smart Search** | Find products by name and get pricing/details |
 | 🛒 **Cart Management** | Add items, check cart status, and verify availability |
 | 📍 **Location** | Detect or manually set delivery location |
-| 💳 **Payment Automation** | **New!** Select saved UPI IDs or enter new ones automatically |
+| 💳 **Payment Automation** | Select Cash on Delivery, or generate a UPI QR code to scan |
 | 🚀 **Checkout Flow** | Handles address selection and ordering flow seamlessly |
 
 ---
@@ -114,7 +114,7 @@ If you prefer to run from source:
    uv sync
    
    # Install Playwright browsers
-   uv run playwright install chromium
+   uv run playwright install firefox
    
    # Run the server
    uv run main.py
@@ -149,15 +149,14 @@ If you prefer to run from source:
 | `enter_otp` | Verify login with OTP |
 | `set_location` | Manually search and set delivery location |
 | `search` | Search for products |
-| `add_to_cart` | Add product to cart by index |
+| `add_to_cart` | Add product to cart by product ID |
 | `remove_from_cart` | Remove item from cart |
 | `check_cart` | View cart contents |
 | `checkout` | Proceed to checkout |
 | `get_addresses` | Get list of saved addresses |
 | `select_address` | Select a delivery address |
 | `proceed_to_pay` | Proceed to payment page |
-| `get_upi_ids` | List available UPI payment options |
-| `select_upi_id` | Select a specific UPI ID for payment |
+| `select_payment_method` | Select Cash on Delivery, or generate a UPI QR code |
 | `pay_now` | Click the final Pay Now button |
 
 ---

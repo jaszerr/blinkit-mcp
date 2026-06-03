@@ -2,7 +2,9 @@ from mcp.server.fastmcp import FastMCP, Image
 from src.auth import BlinkitAuth
 from src.order.blinkit_order import BlinkitOrder
 import io
+import sys
 import asyncio
+import functools
 from contextlib import redirect_stdout
 from dotenv import load_dotenv
 import os
@@ -12,12 +14,24 @@ load_dotenv()
 # Initialize FastMCP
 SERVE_SSE = os.environ.get("SERVE_HTTPS", "").lower() == "true"
 
-print(SERVE_SSE)
-
 if SERVE_SSE:
     mcp = FastMCP("blinkit-mcp", host="0.0.0.0", port=8000)
 else:
     mcp = FastMCP("blinkit-mcp")
+
+# Serialize tool calls. All tools share one global browser/page (ctx), so two
+# concurrent invocations could launch two browsers, race page navigation, or
+# clobber each other's stdout redirection. This lock makes tools run one at a time.
+_tool_lock = asyncio.Lock()
+
+
+def _serialized(fn):
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        async with _tool_lock:
+            return await fn(*args, **kwargs)
+
+    return wrapper
 
 # Marker files for background Playwright install status
 _INSTALL_MARKER = os.path.expanduser("~/.blinkit_mcp/.playwright_installing")
@@ -34,17 +48,20 @@ async def _wait_for_playwright_install(timeout: float = 120.0) -> bool:
     if not _is_playwright_installing():
         return True
 
-    print("Playwright browser is being installed in the background. Waiting...")
+    print(
+        "Playwright browser is being installed in the background. Waiting...",
+        file=sys.stderr,
+    )
     elapsed = 0.0
     while _is_playwright_installing() and elapsed < timeout:
         await asyncio.sleep(1.0)
         elapsed += 1.0
 
     if _is_playwright_installing():
-        print(f"Playwright install still running after {timeout}s.")
+        print(f"Playwright install still running after {timeout}s.", file=sys.stderr)
         return False
 
-    print("Playwright browser install finished.")
+    print("Playwright browser install finished.", file=sys.stderr)
     return True
 
 
@@ -85,7 +102,13 @@ class BlinkitContext:
                 restart = True
 
         if restart:
-            print("Browser not active or closed. Launching...")
+            print("Browser not active or closed. Launching...", file=sys.stderr)
+            # Close any stale browser/playwright handles before relaunching so we
+            # don't leak the previous process on restart.
+            try:
+                await self.auth.close()
+            except Exception:
+                pass
             try:
                 await self.auth.start_browser()
             except Exception as e:
@@ -113,6 +136,7 @@ ctx = BlinkitContext()
 
 
 @mcp.tool()
+@_serialized
 async def check_login() -> str:
     """Check if the current session is logged in. Returns 'Logged In' or 'Not Logged In'."""
     await ctx.ensure_started()
@@ -124,14 +148,21 @@ async def check_login() -> str:
 
 
 @mcp.tool()
+@_serialized
 async def set_location(location_name: str) -> str:
     """Manually set the delivery location via search. Pass 'detect' to click 'Detect my location'. The flow should be: login -> set_location('detect') -> add items -> check_cart -> if address not same, use get_addresses and select_address. Do not use this tool to fix address after adding items."""
     await ctx.ensure_started()
-    await ctx.order.set_location(location_name)
-    return f"Location search initiated for {location_name}. Please check result."
+    f = io.StringIO()
+    with redirect_stdout(f):
+        await ctx.order.set_location(location_name)
+    return (
+        f.getvalue()
+        + f"\nLocation search initiated for {location_name}. Please check result."
+    )
 
 
 @mcp.tool()
+@_serialized
 async def login(phone_number: str) -> str:
     """Log in to Blinkit. Returns status or prompts for OTP (which will be sent to your phone)."""
     await ctx.ensure_started()
@@ -147,6 +178,7 @@ async def login(phone_number: str) -> str:
 
 
 @mcp.tool()
+@_serialized
 async def enter_otp(otp: str) -> str:
     """Enter the OTP received on your phone to complete authentication."""
     await ctx.ensure_started()
@@ -162,6 +194,7 @@ async def enter_otp(otp: str) -> str:
 
 
 @mcp.tool()
+@_serialized
 async def search(query: str) -> str:
     """Search for a product on Blinkit. Returns a list of items with their IDs."""
     await ctx.ensure_started()
@@ -181,6 +214,7 @@ async def search(query: str) -> str:
 
 
 @mcp.tool()
+@_serialized
 async def add_to_cart(item_id: str, quantity: int = 1) -> str:
     """Add an item to the cart. Optional: specify quantity (default 1)."""
     await ctx.ensure_started()
@@ -191,6 +225,7 @@ async def add_to_cart(item_id: str, quantity: int = 1) -> str:
 
 
 @mcp.tool()
+@_serialized
 async def remove_from_cart(item_id: str, quantity: int = 1) -> str:
     """Remove a specific quantity of an item from the cart."""
     await ctx.ensure_started()
@@ -201,6 +236,7 @@ async def remove_from_cart(item_id: str, quantity: int = 1) -> str:
 
 
 @mcp.tool()
+@_serialized
 async def check_cart() -> str:
     """Check the current cart products, total value, and the delivery address. If the delivery address is not the intended one, use get_addresses and select_address to change it."""
     await ctx.ensure_started()
@@ -212,6 +248,7 @@ async def check_cart() -> str:
 
 
 @mcp.tool()
+@_serialized
 async def checkout() -> str:
     """Proceed to checkout (clicks Proceed / Pay button). DO NOT call this if you need to change the delivery address. To change address, use get_addresses and select_address BEFORE checkout! Do not use set_location to fix address here."""
     await ctx.ensure_started()
@@ -222,10 +259,18 @@ async def checkout() -> str:
 
 
 @mcp.tool()
+@_serialized
 async def get_addresses() -> str:
     """Get the list of saved addresses. Use this and select_address to change address on the cart page, if the address in check_cart is incorrect."""
     await ctx.ensure_started()
-    addresses = await ctx.order.get_saved_addresses()
+    f = io.StringIO()
+    with redirect_stdout(f):
+        addresses = await ctx.order.get_saved_addresses()
+    # get_saved_addresses normally returns a list, but can return a status
+    # string (e.g. "CRITICAL: Store is closed."). Pass that through instead of
+    # iterating it character by character.
+    if isinstance(addresses, str):
+        return addresses
     if not addresses:
         return (
             "No addresses found or Address Modal is not open. Try to open kart first."
@@ -238,6 +283,7 @@ async def get_addresses() -> str:
 
 
 @mcp.tool()
+@_serialized
 async def select_address(index: int) -> str:
     """Select a delivery address by its index. Only use this BEFORE checkout."""
     await ctx.ensure_started()
@@ -248,6 +294,7 @@ async def select_address(index: int) -> str:
 
 
 @mcp.tool()
+@_serialized
 async def proceed_to_pay() -> str:
     """Proceed to payment (clicks Proceed button again). Use after selecting address."""
     await ctx.ensure_started()
@@ -258,6 +305,7 @@ async def proceed_to_pay() -> str:
 
 
 @mcp.tool()
+@_serialized
 async def select_payment_method():
     """Select a payment method. Automatically chooses Cash on Delivery if available. If not, it opens UPI and generates a QR code to be scanned by the customer."""
     await ctx.ensure_started()
@@ -304,6 +352,7 @@ async def select_payment_method():
 
 
 @mcp.tool()
+@_serialized
 async def pay_now() -> str:
     """Click the 'Pay Now' button to complete the transaction."""
     await ctx.ensure_started()

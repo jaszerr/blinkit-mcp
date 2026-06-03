@@ -5,7 +5,7 @@ import asyncio
 # Add project root to Python path to allow importing from src
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from src.auth.blinkit_auth import BlinkitAuth
+from src.auth import BlinkitAuth
 from src.order.blinkit_order import BlinkitOrder
 
 
@@ -61,6 +61,7 @@ async def main():
         print("  quit / exit      : Close and exit")
         print("=" * 50 + "\n")
 
+        last_results = []
         while True:
             try:
                 # Use async input to avoid blocking loop
@@ -96,6 +97,7 @@ async def main():
                     term = " ".join(args) if args else "milk"
                     await order.search_product(term)
                     results = await order.get_search_results()
+                    last_results = results or []
                     if results:
                         print("\nSearch Results:")
                         for item in results:
@@ -105,7 +107,12 @@ async def main():
 
                 elif cmd == "add":
                     if args and args[0].isdigit():
-                        await order.add_to_cart(int(args[0]))
+                        idx = int(args[0])
+                        if 0 <= idx < len(last_results):
+                            # add_to_cart expects a product ID, not the list index.
+                            await order.add_to_cart(last_results[idx]["id"])
+                        else:
+                            print("Invalid index. Run 'search' first.")
                     else:
                         print("Usage: add <item_index>")
 
@@ -146,18 +153,13 @@ async def main():
                             await order.place_order()
 
                 elif cmd == "payment":
-                    # usage: payment [id]
-                    # if no id provided, it lists IDs
-                    if len(args) == 0:
-                        await order.get_upi_ids()
-                        print("To select one, use: payment <upi_id>")
-                    else:
-                        upi_id = args[0]
-                        await order.select_upi_id(upi_id)
-
-                        confirm = await get_input("Click 'Pay Now'? (y/n): ")
-                        if confirm.lower() == "y":
-                            await order.click_pay_now()
+                    # Select payment method (Cash if available, else UPI QR),
+                    # then optionally click Pay Now.
+                    result = await order.select_payment_method()
+                    print(result)
+                    confirm = await get_input("Click 'Pay Now'? (y/n): ")
+                    if confirm.lower() == "y":
+                        await order.click_pay_now()
 
                 else:
                     print(f"Unknown command: {cmd}")

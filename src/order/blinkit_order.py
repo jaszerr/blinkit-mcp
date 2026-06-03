@@ -74,6 +74,9 @@ class BlinkitOrder:
     async def remove_from_cart(self, product_id: str, quantity: int = 1):
         return await self.cart_service.remove_from_cart(product_id, quantity)
 
+    async def remove_cart_item_by_name(self, name: str, quantity=None):
+        return await self.cart_service.remove_cart_item_by_name(name, quantity)
+
     async def get_cart_items(self):
         return await self.cart_service.get_cart_items()
 

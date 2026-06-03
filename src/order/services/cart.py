@@ -18,40 +18,6 @@ class CartService(BaseService):
         except Exception:
             pass
 
-    async def _safe_click(self, locator, description="element", timeout=10000):
-        """Click an element with fallback strategies: scroll into view, force click, JS click."""
-        try:
-            # First, scroll the element into view
-            await locator.scroll_into_view_if_needed(timeout=5000)
-            await self.page.wait_for_timeout(300)
-        except Exception:
-            pass
-
-        # Attempt 1: Normal click
-        try:
-            await locator.click(timeout=timeout)
-            return True
-        except Exception as e:
-            print(f"Normal click failed on {description}: {e}")
-
-        # Attempt 2: Force click (bypasses actionability checks)
-        try:
-            await locator.click(force=True, timeout=5000)
-            print(f"Force click succeeded on {description}.")
-            return True
-        except Exception as e:
-            print(f"Force click failed on {description}: {e}")
-
-        # Attempt 3: JavaScript click (last resort)
-        try:
-            await locator.evaluate("el => el.click()")
-            print(f"JS click succeeded on {description}.")
-            return True
-        except Exception as e:
-            print(f"JS click failed on {description}: {e}")
-
-        return False
-
     async def add_to_cart(self, product_id: str, quantity: int = 1):
         """Adds a product to the cart by its unique ID. Supports multiple quantities."""
         print(f"Adding product with ID {product_id} to cart (Quantity: {quantity})...")
@@ -219,48 +185,203 @@ class CartService(BaseService):
         except Exception as e:
             print(f"ERROR: Failed to remove from cart: {e}")
 
+    async def _open_cart(self):
+        """Make the cart visible and return its root locator.
+
+        Tries the open drawer, then the cart button, then navigates straight to
+        the full /cart page (which always renders the line items). Returns the
+        drawer locator when present, otherwise the page body so callers can
+        still find line items on the /cart page. Returns None only if nothing
+        could be opened.
+        """
+        await self._dismiss_overlays()
+        drawer_sel = (
+            "div[class*='CartDrawer'], div[class*='CartSidebar'], "
+            "div.cart-modal-rn, div[class*='CartWrapper__CartContainer']"
+        )
+        drawer = self.page.locator(drawer_sel).first
+        if await drawer.is_visible():
+            return drawer
+
+        # Try the cart button (robust click; plain clicks get eaten on some pages)
+        cart_btn = self.page.locator(
+            "div[class*='CartButton__Button'], div[class*='CartButton__Container'], a[href='/cart']"
+        ).first
+        if await cart_btn.count() > 0:
+            await self._safe_click(cart_btn, "cart button")
+            await self.page.wait_for_timeout(2000)
+            if await drawer.is_visible():
+                return drawer
+
+        # Fallback: the full cart page. This is reliable from any page state
+        # (search results, a wedged drawer, etc.).
+        try:
+            await self.page.goto(
+                "https://blinkit.com/cart", wait_until="domcontentloaded"
+            )
+            await self.page.wait_for_timeout(2000)
+        except Exception as e:
+            print(f"Failed to open /cart page: {e}")
+            return None
+        if await drawer.is_visible():
+            return drawer
+        return self.page.locator("body")
+
+    async def _find_cart_rows(self, root, needle_tokens, needle_str):
+        """Return a list of (row_locator, label) for every cart line whose
+        combined title + variant text matches the query.
+
+        Matches on title AND variant so a pack size (e.g. "500 ml") both matches
+        and distinguishes variants of the same product. Re-resolved fresh on
+        every call: cart rows are live locators whose index shifts as items are
+        removed, so a cached positional row must never be reused across a click.
+        """
+        items = root.locator("div[class*='CartProduct__Container']")
+        if await items.count() == 0:
+            items = root.locator("div[class*='DefaultProductCard__Container']")
+        count = await items.count()
+        matches = []
+        for i in range(count):
+            item = items.nth(i)
+            title_el = item.locator("div[class*='ProductTitle']")
+            if await title_el.count() > 0:
+                title = await title_el.first.inner_text()
+            else:
+                title = await item.inner_text()
+            variant_el = item.locator("div[class*='ProductVariant']")
+            variant = (
+                await variant_el.first.inner_text()
+                if await variant_el.count() > 0
+                else ""
+            )
+            row_text = " ".join(f"{title} {variant}".lower().split())
+            if (needle_str and needle_str in row_text) or (
+                needle_tokens and all(t in row_text for t in needle_tokens)
+            ):
+                label = title.strip().split("\n")[0]
+                v = variant.strip().split("\n")[0]
+                if v:
+                    label = f"{label} | {v}"
+                matches.append((item, label))
+        return matches
+
+    async def remove_cart_item_by_name(self, name: str, quantity=None):
+        """Remove a cart line item by matching its title + variant text.
+
+        Works for any pack size / variant because it clicks the minus button
+        inside the matched cart line item itself, instead of locating a product
+        card by ID (which fails when the in-cart pack differs from the product
+        card's default variant). `name` is matched case-insensitively against
+        title + variant; include the pack size (e.g. "Amul Gold 500 ml") to pick
+        a specific variant. If the query matches more than one cart line, it
+        refuses and asks for a more specific name rather than guessing.
+        quantity=None removes the item entirely.
+        """
+        print(f"Removing cart item matching '{name}'...")
+        try:
+            root = await self._open_cart()
+            if root is None:
+                return "ERROR: Could not open the cart."
+
+            # Normalize the query: drop a pasted price/qty tail from check_cart's
+            # "Title | Variant | Rs.. | Qty: .." format, strip the "|" separators,
+            # then match on the remaining title+variant tokens.
+            raw = name.strip().lower()
+            # Strip a leading list marker so a pasted check_cart bullet
+            # ("• Amul Gold | 500 ml | ...") still matches.
+            raw = raw.lstrip("•*-·∙ \t")
+            for cut in ("| ₹", "|₹", " ₹", "| qty", "|qty", " qty"):
+                idx = raw.find(cut)
+                if idx != -1:
+                    raw = raw[:idx]
+            needle_str = " ".join(raw.replace("|", " ").split())
+            needle_tokens = needle_str.split()
+            if not needle_tokens:
+                return "ERROR: Empty item name."
+
+            matches = await self._find_cart_rows(root, needle_tokens, needle_str)
+            if not matches:
+                return (
+                    f"ERROR: No cart item matching '{name}' found. "
+                    "Call check_cart to see exact item names."
+                )
+            if len(matches) > 1:
+                labels = "; ".join(lbl for _, lbl in matches)
+                return (
+                    f"ERROR: '{name}' matches {len(matches)} cart items ({labels}). "
+                    "Pass a more specific name including the pack size to pick one."
+                )
+
+            target_title = matches[0][1]
+
+            # Click minus until the matched item is gone, or `quantity` units
+            # removed. CRITICAL: re-find the row by title+variant every pass.
+            # Rows are live locators that shift index when one is removed, so
+            # reusing a positional locator could drift onto and delete a
+            # DIFFERENT item (it would empty the whole cart). Re-matching each
+            # pass only ever clicks the intended item's minus; stop when it is
+            # gone (0 matches) or shows ADD with no minus. A >1 match mid-loop
+            # (should not happen after the up-front check) also stops safely.
+            max_clicks = quantity if quantity else 30
+            clicks = 0
+            for _ in range(max_clicks):
+                rows = await self._find_cart_rows(root, needle_tokens, needle_str)
+                if len(rows) != 1:
+                    break
+                row = rows[0][0]
+
+                qty_container = row.locator(
+                    "div[class*='AddToCart__UpdatedButtonContainer']"
+                ).first
+                if await qty_container.count() > 0:
+                    minus_btn = qty_container.locator(".icon-minus").first
+                    if await minus_btn.count() > 0:
+                        minus_btn = minus_btn.locator("..")
+                    else:
+                        minus_btn = qty_container.locator("text='-'").first
+                else:
+                    minus_btn = row.locator(".icon-minus").first
+                    if await minus_btn.count() > 0:
+                        minus_btn = minus_btn.locator("..")
+                    else:
+                        minus_btn = row.locator("text='-'").first
+
+                # No decrement control (e.g. the row now shows ADD) => done.
+                if await minus_btn.count() == 0 or not await minus_btn.is_visible():
+                    break
+
+                await self._safe_click(minus_btn, f"- button for {target_title}")
+                clicks += 1
+                await self.page.wait_for_timeout(600)
+
+            if clicks == 0:
+                return f"ERROR: Found '{target_title}' but no decrement (-) button on it."
+
+            # Removing entirely (quantity=None): confirm the row is actually gone
+            # before claiming success. A line whose qty exceeded the click cap
+            # would otherwise be reported as removed while still in the cart.
+            if quantity is None:
+                if await self._find_cart_rows(root, needle_tokens, needle_str):
+                    return (
+                        f"WARNING: clicked minus {clicks}x on '{target_title}' but it is still "
+                        "in the cart. Call remove_cart_item again to finish removing it."
+                    )
+                print(f"Removed '{target_title}' from cart.")
+                return f"Removed '{target_title}' from cart."
+
+            print(f"Removed {clicks} unit(s) of '{target_title}' from cart.")
+            return f"Removed {clicks} unit(s) of '{target_title}' from cart."
+        except Exception as e:
+            return f"ERROR: Failed to remove cart item: {e}"
+
     async def get_cart_items(self):
         """Checks items in the cart and returns the text content."""
         try:
-            # Dismiss any overlays before trying to open the cart
-            await self._dismiss_overlays()
-
-            drawer = self.page.locator(
-                "div[class*='CartDrawer'], div[class*='CartSidebar'], div.cart-modal-rn, div[class*='CartWrapper__CartContainer']"
-            ).first
-
-            # If drawer isn't visible, try to click the cart button to open it
-            if not await drawer.is_visible():
-                cart_btn = (
-                    self.page.locator(
-                        "div[class*='CartButton__Button'], div[class*='CartButton__Container'], a[href='/cart'], div[class*='cart']"
-                    )
-                    .filter(has_text="Cart")
-                    .last
-                )
-
-                if await cart_btn.count() == 0:
-                    cart_btn = self.page.locator("div[class*='CartButton']").first
-
-                if await cart_btn.count() > 0:
-                    clicked = await self._safe_click(cart_btn, "cart button")
-                    if not clicked:
-                        return (
-                            "ERROR: Failed to click cart button (may be blocked by overlay)."
-                        )
-                    await self.page.wait_for_timeout(2000)
-                else:
-                    # Look for anything with Cart or View Cart
-                    alt_btn = (
-                        self.page.locator("button, div").filter(has_text="Cart").last
-                    )
-                    if await alt_btn.count() > 0:
-                        await self._safe_click(alt_btn, "alt cart button")
-                        await self.page.wait_for_timeout(2000)
-                    else:
-                        return "ERROR: Cart button not found."
-
-            if not await drawer.is_visible():
+            # Open the cart via the shared robust path (drawer -> cart button
+            # -> full /cart page). check_cart used to do a single fragile click
+            # that timed out intermittently; reuse the same opener as removal.
+            drawer = await self._open_cart()
+            if drawer is None:
                 return "ERROR: Cart drawer did not open."
 
             # Verify availability

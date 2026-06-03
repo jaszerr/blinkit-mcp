@@ -237,6 +237,17 @@ async def remove_from_cart(item_id: str, quantity: int = 1) -> str:
 
 @mcp.tool()
 @_serialized
+async def remove_cart_item(name: str) -> str:
+    """Remove an item from the cart by its name as shown in check_cart (e.g. 'Amul Gold Full Cream Milk'). Use this when remove_from_cart by product ID fails, which happens for a specific pack size/variant whose ID is not returned by search. Matches the cart line by title + variant (case-insensitive) and removes it entirely. If the cart has multiple pack sizes of the same product, include the pack size to pick one (e.g. 'Amul Gold 500 ml'); an ambiguous name returns an error listing the matches instead of guessing."""
+    await ctx.ensure_started()
+    f = io.StringIO()
+    with redirect_stdout(f):
+        result = await ctx.order.remove_cart_item_by_name(name)
+    return f.getvalue() + (("\n" + result) if result else "")
+
+
+@mcp.tool()
+@_serialized
 async def check_cart() -> str:
     """Check the current cart products, total value, and the delivery address. If the delivery address is not the intended one, use get_addresses and select_address to change it."""
     await ctx.ensure_started()

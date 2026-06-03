@@ -20,26 +20,42 @@ class CheckoutService(BaseService):
                 .first
             )
 
-            # If Proceed not visible, try opening the cart first
+            # If Proceed not visible, open the cart. Try the cart button first,
+            # then fall back to navigating straight to the full /cart page,
+            # which reliably renders the CheckoutStrip CTA from any page state.
             if not await proceed_btn.is_visible():
                 print("Proceed button not visible. Attempting to open Cart drawer...")
                 cart_btn = self.page.locator(
                     "div[class*='CartButton__Button'], div[class*='CartButton__Container']"
                 )
                 if await cart_btn.count() > 0:
-                    await cart_btn.first.click()
-                    print("Clicked 'My Cart' button.")
+                    await self._safe_click(cart_btn.first, "My Cart button")
                     await self.page.wait_for_timeout(2000)
                 else:
                     print("Could not find 'My Cart' button.")
 
-            # Try clicking Proceed again
+                if not await proceed_btn.is_visible():
+                    print("Opening full cart page directly...")
+                    try:
+                        await self.page.goto(
+                            "https://blinkit.com/cart", wait_until="domcontentloaded"
+                        )
+                        await self.page.wait_for_timeout(2000)
+                    except Exception as e:
+                        print(f"Failed to open /cart page: {e}")
+
+            # Click Proceed with scroll/force/JS fallbacks. A plain click hangs
+            # for the full timeout when a sticky element overlaps the CTA, which
+            # is the "button found but click never goes through" stall.
             if await proceed_btn.is_visible():
-                await proceed_btn.click()
-                print(
-                    "Cart checkout successfully.\nYou can select the payment method and proceed to pay."
-                )
-                await self.page.wait_for_timeout(3000)
+                clicked = await self._safe_click(proceed_btn, "Proceed To Pay")
+                if clicked:
+                    print(
+                        "Cart checkout successfully.\nYou can select the payment method and proceed to pay."
+                    )
+                    await self.page.wait_for_timeout(3000)
+                else:
+                    return "ERROR: Found the Proceed button but could not click it."
             else:
                 print(
                     "Proceed button not visible. Cart might be empty or Store Unavailable."

@@ -77,6 +77,10 @@
             "description": "Remove a quantity of an item from the cart"
         },
         {
+            "name": "remove_cart_item",
+            "description": "Remove a cart item by its name (handles pack sizes/variants)"
+        },
+        {
             "name": "check_cart",
             "description": "View cart contents, total, and delivery address"
         },

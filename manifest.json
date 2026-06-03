@@ -26,6 +26,15 @@
             ],
             "env": {
                 "HEADLESS": "${user_config.HEADLESS}"
+            },
+            "platform_overrides": {
+                "win32": {
+                    "command": "cmd",
+                    "args": [
+                        "/c",
+                        "${__dirname}\\start.bat"
+                    ]
+                }
             }
         }
     },

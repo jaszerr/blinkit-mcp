@@ -39,7 +39,42 @@ class CheckoutService(BaseService):
                 )
 
         except Exception as e:
-            print(f"Error placing order: {e}")
+            print(f"ERROR: Failed to place order: {e}")
+
+    async def _is_tile_disabled(self, panel, button=None):
+        """Best-effort check for whether a payment tile is non-selectable.
+
+        The widget can mark a method unavailable in several ways: a disabled /
+        aria-disabled attribute, greyed-out styling (pointer-events: none or low
+        opacity), a hidden tile, or an 'unavailable' label. The old behaviour
+        only checked the attribute, so a class/visibility-disabled tile got
+        clicked anyway. Probe all of them instead.
+        """
+        try:
+            if not await panel.is_visible():
+                return True
+            for el in (panel, button):
+                if el is None or await el.count() == 0:
+                    continue
+                if await el.first.get_attribute("disabled") is not None:
+                    return True
+                if await el.first.get_attribute("aria-disabled") == "true":
+                    return True
+            styled_off = await panel.first.evaluate(
+                """el => {
+                    const s = getComputedStyle(el);
+                    return s.pointerEvents === 'none' || parseFloat(s.opacity) < 0.4;
+                }"""
+            )
+            if styled_off:
+                return True
+            txt = (await panel.first.inner_text()).lower()
+            if "unavailable" in txt or "not available" in txt:
+                return True
+        except Exception:
+            # If the probe itself fails, don't falsely claim the tile is disabled.
+            return False
+        return False
 
     async def select_payment_method(self):
         """Checks for Cash availability, selects it if available, else falls back to UPI QR."""
@@ -50,31 +85,28 @@ class CheckoutService(BaseService):
             )
             if not iframe_element:
                 print("Payment widget iframe not found.")
-                return "Payment widget not found."
+                return "ERROR: Payment widget not found."
 
             frame = await iframe_element.content_frame()
             if not frame:
-                return "Payment widget frame content not found."
+                return "ERROR: Payment widget frame content not found."
 
-            await frame.wait_for_load_state("networkidle")
+            # Wait for the payment options to render. networkidle can hang
+            # forever on a widget that keeps polling / sending analytics, so
+            # bound the wait to the tiles we actually need and fall through on
+            # timeout instead of blocking the whole tool call.
+            try:
+                await frame.locator(
+                    "div[title='Cash'], div[title='UPI']"
+                ).first.wait_for(state="visible", timeout=15000)
+            except Exception:
+                print("Payment options did not render within 15s; proceeding anyway.")
 
             # Check Cash
             cash_panel = frame.locator("div[title='Cash']")
             if await cash_panel.count() > 0:
-                # Check if it has a disabled attribute on the panel itself
-                is_disabled_attr = (
-                    await cash_panel.first.get_attribute("disabled") is not None
-                )
-
-                # Check aria-disabled on the inner button
                 cash_button = cash_panel.locator("div[role='button']")
-                is_aria_disabled = False
-                if await cash_button.count() > 0:
-                    is_aria_disabled = (
-                        await cash_button.first.get_attribute("aria-disabled") == "true"
-                    )
-
-                if not is_disabled_attr and not is_aria_disabled:
+                if not await self._is_tile_disabled(cash_panel, cash_button):
                     print("Cash is available. Selecting Cash on Delivery...")
                     if await cash_button.count() > 0:
                         await cash_button.first.click()
@@ -132,14 +164,14 @@ class CheckoutService(BaseService):
                     )
                 else:
                     print("Generate QR button not found within UPI.")
-                    return "UPI section opened but 'Generate QR' button not found."
+                    return "ERROR: UPI section opened but 'Generate QR' button not found."
             else:
                 print("UPI option not found.")
-                return "UPI option not found in payment widget."
+                return "ERROR: UPI option not found in payment widget."
 
         except Exception as e:
             print(f"Error selecting payment method: {e}")
-            return f"Error: {str(e)}"
+            return f"ERROR: {str(e)}"
 
     async def click_pay_now(self):
         """Clicks the final Pay Now button."""
@@ -186,8 +218,8 @@ class CheckoutService(BaseService):
                         return "Clicked payment button inside iframe."
 
             print("Could not find 'Pay Now' button (timeout or not in DOM).")
-            return "Could not find Pay Now button."
+            return "ERROR: Could not find Pay Now button."
 
         except Exception as e:
             print(f"Error clicking Pay Now: {e}")
-            return f"Error: {str(e)}"
+            return f"ERROR: {str(e)}"

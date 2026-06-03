@@ -160,7 +160,7 @@ class CartService(BaseService):
                 return
 
         except Exception as e:
-            print(f"Error adding to cart: {e}")
+            print(f"ERROR: Failed to add to cart: {e}")
 
     async def remove_from_cart(self, product_id: str, quantity: int = 1):
         """Removes a specific quantity of a product from the cart."""
@@ -217,7 +217,7 @@ class CartService(BaseService):
                 print(f"Item {product_id} is not in cart (no '-' button found).")
 
         except Exception as e:
-            print(f"Error removing from cart: {e}")
+            print(f"ERROR: Failed to remove from cart: {e}")
 
     async def get_cart_items(self):
         """Checks items in the cart and returns the text content."""
@@ -246,7 +246,7 @@ class CartService(BaseService):
                     clicked = await self._safe_click(cart_btn, "cart button")
                     if not clicked:
                         return (
-                            "Failed to click cart button (may be blocked by overlay)."
+                            "ERROR: Failed to click cart button (may be blocked by overlay)."
                         )
                     await self.page.wait_for_timeout(2000)
                 else:
@@ -258,10 +258,10 @@ class CartService(BaseService):
                         await self._safe_click(alt_btn, "alt cart button")
                         await self.page.wait_for_timeout(2000)
                     else:
-                        return "Cart button not found."
+                        return "ERROR: Cart button not found."
 
             if not await drawer.is_visible():
-                return "Cart drawer did not open."
+                return "ERROR: Cart drawer did not open."
 
             # Verify availability
             if (
@@ -333,4 +333,4 @@ class CartService(BaseService):
             return content
 
         except Exception as e:
-            return f"Error getting cart items: {e}"
+            return f"ERROR: Failed to get cart items: {e}"

@@ -254,8 +254,11 @@ async def checkout() -> str:
     await ctx.ensure_started()
     f = io.StringIO()
     with redirect_stdout(f):
-        await ctx.order.place_order()
-    return f.getvalue()
+        result = await ctx.order.place_order()
+    # place_order() returns a status string (e.g. "CRITICAL: Store is closed.")
+    # on failure but only prints on success; surface the status so the model
+    # doesn't see an empty/success-looking result.
+    return f.getvalue() + (("\n" + result) if result else "")
 
 
 @mcp.tool()
@@ -289,8 +292,10 @@ async def select_address(index: int) -> str:
     await ctx.ensure_started()
     f = io.StringIO()
     with redirect_stdout(f):
-        await ctx.order.select_address(index)
-    return f.getvalue()
+        result = await ctx.order.select_address(index)
+    # select_address() returns a status string (e.g. "CRITICAL: Store is
+    # closed.") on failure but only prints on success; surface it.
+    return f.getvalue() + (("\n" + result) if result else "")
 
 
 @mcp.tool()
@@ -300,8 +305,10 @@ async def proceed_to_pay() -> str:
     await ctx.ensure_started()
     f = io.StringIO()
     with redirect_stdout(f):
-        await ctx.order.place_order()
-    return f.getvalue()
+        result = await ctx.order.place_order()
+    # Surface place_order()'s status string (e.g. store-closed) so the model
+    # doesn't see an empty/success-looking result.
+    return f.getvalue() + (("\n" + result) if result else "")
 
 
 @mcp.tool()
@@ -323,17 +330,33 @@ async def select_payment_method():
             b64_data = res.get("qr_base64")
             img_format = res.get("format", "png")
 
-            # Save the image locally and open it for the user
-            qr_path = os.path.abspath(f"payment_qr.{img_format}")
+            # Save the image into the app's data dir (not the current working
+            # directory, which under Claude Desktop is arbitrary / may be
+            # read-only) and open it for the user.
+            qr_dir = os.path.expanduser("~/.blinkit_mcp")
+            os.makedirs(qr_dir, exist_ok=True)
+            qr_path = os.path.join(qr_dir, f"payment_qr.{img_format}")
             try:
                 with open(qr_path, "wb") as f_img:
                     f_img.write(base64.b64decode(b64_data))
 
-                # Automatically open the image
+                # Automatically open the image. redirect_stdout() only redirects
+                # Python's sys.stdout, NOT a child process's fd 1, so the opener's
+                # own output could leak onto the MCP JSON-RPC channel and corrupt
+                # it. Silence the child's stdout/stderr. (os.startfile on Windows
+                # spawns detached and writes nothing to our fds, so it is fine.)
                 if sys.platform == "darwin":
-                    subprocess.run(["open", qr_path])
+                    subprocess.run(
+                        ["open", qr_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 elif sys.platform.startswith("linux"):
-                    subprocess.run(["xdg-open", qr_path])
+                    subprocess.run(
+                        ["xdg-open", qr_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 elif sys.platform == "win32":
                     os.startfile(qr_path)
             except Exception as e:

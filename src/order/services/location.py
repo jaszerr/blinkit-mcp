@@ -59,7 +59,7 @@ class LocationService(BaseService):
                 print("No location results found.")
 
         except Exception as e:
-            print(f"Error setting location: {e}")
+            print(f"ERROR: Failed to set location: {e}")
 
     async def get_saved_addresses(self):
         """Scrapes saved addresses from the selection modal."""
@@ -161,7 +161,7 @@ class LocationService(BaseService):
             return addresses
 
         except Exception as e:
-            print(f"Error getting addresses: {e}")
+            print(f"ERROR: Failed to get addresses: {e}")
             return []
 
     async def select_address(self, index: int):
@@ -182,4 +182,4 @@ class LocationService(BaseService):
             else:
                 print(f"Invalid address index: {index}")
         except Exception as e:
-            print(f"Error selecting address: {e}")
+            print(f"ERROR: Failed to select address: {e}")

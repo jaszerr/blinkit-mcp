@@ -91,7 +91,7 @@ class SearchService(BaseService):
                     print("Could not detect standard product cards.")
 
         except Exception as e:
-            print(f"Error during search: {e}")
+            print(f"ERROR: Search failed: {e}")
 
     async def get_search_results(self, limit=20):
         """Parses search results and returns a list of product details including IDs."""
@@ -143,6 +143,6 @@ class SearchService(BaseService):
                 )
 
         except Exception as e:
-            print(f"Error extracting search results: {e}")
+            print(f"ERROR: Failed to extract search results: {e}")
 
         return results

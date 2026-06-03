@@ -185,9 +185,12 @@ blinkit-mcp/
 │   │       ├── location.py    # Location logic
 │   │       ├── cart.py        # Cart logic
 │   │       └── checkout.py    # Checkout & Payment logic
+│   ├── utils/             # Shared utilities
+│   │   └── geo.py         # IP-based geolocation lookup
 │   └── server.py          # MCP Tool definitions
 ├── test/
-│   └── cli.py             # CLI for testing independent of Claude
+│   ├── cli.py             # CLI for testing independent of Claude
+│   └── tools.py           # Lists registered MCP tools (registration check)
 └── README.md
 ```
 

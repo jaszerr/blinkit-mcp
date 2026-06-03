@@ -1,5 +1,16 @@
+# Virtual envs / caches
 .venv/
 __pycache__/
 *.pyc
 .git/
-test.py
+
+# Secrets - never bundle these into the distributable .mcpb
+.env
+cookies/
+
+# Dev/test files (not needed at runtime)
+test/
+
+# Build artifacts / OS cruft
+*.mcpb
+.DS_Store

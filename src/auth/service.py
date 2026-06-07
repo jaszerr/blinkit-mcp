@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import asyncio
@@ -47,8 +48,29 @@ class BlinkitAuth:
 
         if os.path.exists(self.session_path):
             print(f"Loading session from {self.session_path}", file=sys.stderr)
+            # Strip the saved localStorage "cart" snapshot before restoring the
+            # session. Replaying it makes the site push the stale local cart
+            # back to the server, silently re-adding items that were removed in
+            # a later session (items kept "resurrecting" in the live cart).
+            # The server-side cart is authoritative; the page refetches it.
+            storage_state = self.session_path
+            try:
+                with open(self.session_path, "r", encoding="utf-8") as f:
+                    state = json.load(f)
+                for origin in state.get("origins", []):
+                    origin["localStorage"] = [
+                        kv
+                        for kv in origin.get("localStorage", [])
+                        if kv.get("name") != "cart"
+                    ]
+                storage_state = state
+            except Exception as e:
+                print(
+                    f"Warning: could not strip stale cart from session state: {e}",
+                    file=sys.stderr,
+                )
             self.context = await self.browser.new_context(
-                storage_state=self.session_path,
+                storage_state=storage_state,
                 permissions=["geolocation"],
                 geolocation=geolocation,
             )

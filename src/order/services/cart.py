@@ -185,14 +185,30 @@ class CartService(BaseService):
         except Exception as e:
             print(f"ERROR: Failed to remove from cart: {e}")
 
+    async def _cart_is_empty(self):
+        """True if the header cart button shows an empty cart.
+
+        With items the button reads "N item(s) / price"; empty it reads
+        "My Cart". The drawer refuses to open at all on an empty cart, so
+        this is how callers distinguish "empty" from "drawer failed to open".
+        """
+        try:
+            btn = self.page.locator("div[class*='CartButton__Container']").first
+            if await btn.count() == 0:
+                return False
+            text = (await btn.inner_text()).lower()
+            return "my cart" in text and "item" not in text
+        except Exception:
+            return False
+
     async def _open_cart(self):
         """Make the cart visible and return its root locator.
 
-        Tries the open drawer, then the cart button, then navigates straight to
-        the full /cart page (which always renders the line items). Returns the
-        drawer locator when present, otherwise the page body so callers can
-        still find line items on the /cart page. Returns None only if nothing
-        could be opened.
+        Tries the open drawer, then clicks the cart button (retrying once).
+        Returns None if the drawer never appears. Navigating to /cart is NOT a
+        fallback: that route does not exist on desktop web and redirects back
+        to the homepage, which previously made callers parse homepage text as
+        if it were the cart.
         """
         await self._dismiss_overlays()
         drawer_sel = (
@@ -203,29 +219,25 @@ class CartService(BaseService):
         if await drawer.is_visible():
             return drawer
 
-        # Try the cart button (robust click; plain clicks get eaten on some pages)
+        # The drawer refuses to open on an empty cart, so don't burn two click
+        # attempts to learn what the header button already says.
+        if await self._cart_is_empty():
+            return None
+
+        # Click the cart button (robust click; plain clicks get eaten on some
+        # pages). Retry once: the header re-renders with the delivery ETA and
+        # can swallow the first click.
         cart_btn = self.page.locator(
             "div[class*='CartButton__Button'], div[class*='CartButton__Container'], a[href='/cart']"
         ).first
-        if await cart_btn.count() > 0:
-            await self._safe_click(cart_btn, "cart button")
+        for attempt in ("cart button", "cart button (retry)"):
+            if await cart_btn.count() == 0:
+                break
+            await self._safe_click(cart_btn, attempt)
             await self.page.wait_for_timeout(2000)
             if await drawer.is_visible():
                 return drawer
-
-        # Fallback: the full cart page. This is reliable from any page state
-        # (search results, a wedged drawer, etc.).
-        try:
-            await self.page.goto(
-                "https://blinkit.com/cart", wait_until="domcontentloaded"
-            )
-            await self.page.wait_for_timeout(2000)
-        except Exception as e:
-            print(f"Failed to open /cart page: {e}")
-            return None
-        if await drawer.is_visible():
-            return drawer
-        return self.page.locator("body")
+        return None
 
     async def _find_cart_rows(self, root, needle_tokens, needle_str):
         """Return a list of (row_locator, label) for every cart line whose
@@ -265,6 +277,49 @@ class CartService(BaseService):
                 matches.append((item, label))
         return matches
 
+    async def _find_minus_btn(self, root):
+        """Resolve the decrement (-) control under `root`.
+
+        Search-page product cards render it as an .icon-minus glyph; cart
+        drawer line items render the -/+ pair as AddToCart__AddMinusIcon divs
+        laid out as [- qty +]. Don't trust DOM order for which icon is the
+        minus: validate by position and take the LEFTMOST of the pair. A lone
+        AddMinusIcon is ambiguous (could be the plus), so refuse it rather
+        than risk incrementing on a removal path. Returns a clickable locator,
+        or None.
+        """
+        minus = root.locator(".icon-minus").first
+        if await minus.count() > 0:
+            return minus.locator("..")
+        icons = root.locator("div[class*='AddMinusIcon']")
+        n = await icons.count()
+        if n >= 2:
+            # Pick the leftmost icon by geometry, considering only visible
+            # icons with a real bounding box. Refuse to click if fewer than
+            # two have usable geometry: a guess on a removal path could hit
+            # the plus and increment instead.
+            best = None
+            usable = 0
+            for i in range(n):
+                icon = icons.nth(i)
+                if not await icon.is_visible():
+                    continue
+                box = await icon.bounding_box()
+                if not box:
+                    continue
+                usable += 1
+                if best is None or box["x"] < best[0]:
+                    best = (box["x"], icon)
+            if best is not None and usable >= 2:
+                return best[1].locator("..")
+            print("AddMinusIcon geometry ambiguous; refusing to click.")
+        elif n == 1:
+            print("Single AddMinusIcon found; ambiguous (- or +), refusing to click.")
+        minus = root.locator("text='-'").first
+        if await minus.count() > 0:
+            return minus
+        return None
+
     async def remove_cart_item_by_name(self, name: str, quantity=None):
         """Remove a cart line item by matching its title + variant text.
 
@@ -281,6 +336,8 @@ class CartService(BaseService):
         try:
             root = await self._open_cart()
             if root is None:
+                if await self._cart_is_empty():
+                    return f"ERROR: Cart is empty; nothing matches '{name}'."
                 return "ERROR: Could not open the cart."
 
             # Normalize the query: drop a pasted price/qty tail from check_cart's
@@ -333,21 +390,11 @@ class CartService(BaseService):
                 qty_container = row.locator(
                     "div[class*='AddToCart__UpdatedButtonContainer']"
                 ).first
-                if await qty_container.count() > 0:
-                    minus_btn = qty_container.locator(".icon-minus").first
-                    if await minus_btn.count() > 0:
-                        minus_btn = minus_btn.locator("..")
-                    else:
-                        minus_btn = qty_container.locator("text='-'").first
-                else:
-                    minus_btn = row.locator(".icon-minus").first
-                    if await minus_btn.count() > 0:
-                        minus_btn = minus_btn.locator("..")
-                    else:
-                        minus_btn = row.locator("text='-'").first
+                btn_root = qty_container if await qty_container.count() > 0 else row
+                minus_btn = await self._find_minus_btn(btn_root)
 
                 # No decrement control (e.g. the row now shows ADD) => done.
-                if await minus_btn.count() == 0 or not await minus_btn.is_visible():
+                if minus_btn is None or not await minus_btn.is_visible():
                     break
 
                 await self._safe_click(minus_btn, f"- button for {target_title}")
@@ -382,6 +429,8 @@ class CartService(BaseService):
             # that timed out intermittently; reuse the same opener as removal.
             drawer = await self._open_cart()
             if drawer is None:
+                if await self._cart_is_empty():
+                    return "Cart is empty."
                 return "ERROR: Cart drawer did not open."
 
             # Verify availability

@@ -20,29 +20,24 @@ class CheckoutService(BaseService):
                 .first
             )
 
-            # If Proceed not visible, open the cart. Try the cart button first,
-            # then fall back to navigating straight to the full /cart page,
-            # which reliably renders the CheckoutStrip CTA from any page state.
+            # If Proceed not visible, open the cart drawer via the cart button,
+            # retrying once (the header re-renders with the delivery ETA and
+            # can swallow the first click). Navigating to /cart is NOT a
+            # fallback: that route does not exist on desktop web and redirects
+            # back to the homepage.
             if not await proceed_btn.is_visible():
                 print("Proceed button not visible. Attempting to open Cart drawer...")
                 cart_btn = self.page.locator(
                     "div[class*='CartButton__Button'], div[class*='CartButton__Container']"
                 )
                 if await cart_btn.count() > 0:
-                    await self._safe_click(cart_btn.first, "My Cart button")
-                    await self.page.wait_for_timeout(2000)
+                    for attempt in ("My Cart button", "My Cart button (retry)"):
+                        await self._safe_click(cart_btn.first, attempt)
+                        await self.page.wait_for_timeout(2000)
+                        if await proceed_btn.is_visible():
+                            break
                 else:
                     print("Could not find 'My Cart' button.")
-
-                if not await proceed_btn.is_visible():
-                    print("Opening full cart page directly...")
-                    try:
-                        await self.page.goto(
-                            "https://blinkit.com/cart", wait_until="domcontentloaded"
-                        )
-                        await self.page.wait_for_timeout(2000)
-                    except Exception as e:
-                        print(f"Failed to open /cart page: {e}")
 
             # Click Proceed with scroll/force/JS fallbacks. A plain click hangs
             # for the full timeout when a sticky element overlaps the CTA, which
